@@ -1,0 +1,145 @@
+
+use std::path::Path;
+use std::time::Duration;
+use std::{fs, thread};
+use reqwest::blocking::{Client, Response};
+use reqwest::header::CONTENT_TYPE;
+use reqwest::{Error};
+
+const OLD_IP_FILE_NAME : &str  = "old_ip.tmp";
+const WEBHOOK_FILE_NAME : &str = "webhook.json";
+
+
+fn main() {
+    //Read config.toml or create it if it does not exist
+    let config_path = "config.toml";
+    if !Path::new(config_path).exists() {
+        fs::write(config_path, "webhook = \"\"\nwait_seconds = 60)")
+            .expect("Unable to create config.toml");
+        println!("config.toml created. Please fill in the token and webhook fields.");
+        return;
+    }
+    // Read the config file
+    let config_content = fs::read_to_string(config_path)
+        .expect("Unable to read config.toml");
+    let config: toml::Value = toml::from_str(&config_content).unwrap();
+    let webhook = config.get("webhook").and_then(|v| v.as_str()).unwrap_or("");
+    let wait_seconds = config.get("wait_seconds").and_then(|v| v.as_integer()).unwrap_or(60) as u64;
+
+    if webhook.is_empty() {
+        println!("Webhook URL is not set in config.toml. Please set it and try again.");
+        return;
+        
+    }
+
+    // Initialize the logger
+    let mut log = paris::Logger::new();
+    log.info("Starting IP change notifier...");
+
+
+
+    // Check if the old_ip.txt file exists
+    let mut old_ip : String;
+    if Path::new(OLD_IP_FILE_NAME).exists() {
+        old_ip =  fs::read_to_string(OLD_IP_FILE_NAME).unwrap();
+    }else{
+        loop {
+            match get_new_ip() {
+                Ok(response) => match response.text() {
+                    Ok(ip) => {
+                        old_ip = ip;
+                        break;
+                    }
+                    Err(_) => {
+                        log.error("Failed to get IP, retrying...");
+                        thread::sleep(Duration::from_secs(2));
+                    }
+                },
+                Err(_) => {
+                    log.error("Failed to get IP, retrying...");
+                    thread::sleep(Duration::from_secs(2));
+                }
+            }
+        }
+        // If the file does not exist, create it with the current IP
+        fs::write(OLD_IP_FILE_NAME, old_ip.clone())
+            .expect("Unable to write to old_ip.txt");
+        send_ip(old_ip.clone(),webhook).expect("Error sending initial IP");
+    }
+
+
+    ctrlc::set_handler(move || {
+        println!("Ctrl-C received, exiting...");
+        //Write the current IP to old_ip.txt before exiting
+        std::process::exit(0);
+    }).expect("Error setting Ctrl-C handler");
+
+
+    loop {
+        // Log the current IP address
+        log.info("Checking for IP changes...");
+        let temp_ip_res = get_new_ip();
+
+
+        // If there is an error getting the current IP, log it
+        if temp_ip_res.is_err() {
+            log.error("Error getting the current IP address.");
+        }else{
+            let temp_ip = temp_ip_res.unwrap().text().unwrap();
+            log.info(format!("Current IP: {}", temp_ip).as_str());
+
+            if temp_ip != old_ip.clone() {
+                match send_ip(temp_ip.clone(),webhook) {
+                    Ok(ok) => {
+                        if ok.status().is_success() {
+                            log.info("IP sent successfully.");
+                        } else {
+                            log.error(format!("Failed to send IP: {}", ok.status()).as_str());
+                        }
+                    },
+                    Err(err) => {
+                        log.error(format!("Error sending IP: {}", err).as_str());
+                    },
+                }
+                fs::write(OLD_IP_FILE_NAME, temp_ip.clone())
+                    .expect("Unable to write to old_ip.txt");
+                log.info(format!("IP changed to: {}", temp_ip).as_str());
+                old_ip = temp_ip;
+            }
+        }
+
+        thread::sleep(Duration::from_secs(wait_seconds));
+    }
+
+}
+
+
+fn send_ip(ip : String,webhook : &str) -> Result<Response, Error> {
+
+    // Read the webhook.json file and replace #ip# with the current IP
+    if !Path::new(WEBHOOK_FILE_NAME).exists() {
+        let contents = r#"{
+    "content" : "IP has changed to #ip#",
+    "username" : "IP Notifier"
+}"#.to_string();
+        fs::write(WEBHOOK_FILE_NAME, contents).unwrap();
+    }
+    let mut webhook_json = fs::read_to_string(WEBHOOK_FILE_NAME)
+        .expect("Reading webhook.json");
+
+    webhook_json = webhook_json.replace("#ip#", ip.as_str());
+
+    let client = Client::new();
+    return client
+        .post(webhook)
+        .header(CONTENT_TYPE, "application/json")
+        .body(webhook_json)
+        .send();
+}
+
+fn get_new_ip() -> Result<Response,Error>{
+
+    let client = Client::new();
+    return client.get("https://api.ipify.org")
+    .send();
+}
