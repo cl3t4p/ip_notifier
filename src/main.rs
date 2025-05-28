@@ -6,21 +6,25 @@ use reqwest::blocking::{Client, Response};
 use reqwest::header::CONTENT_TYPE;
 use reqwest::{Error};
 
-const OLD_IP_FILE_NAME : &str  = "old_ip.tmp";
-const WEBHOOK_FILE_NAME : &str = "webhook.json";
+const OLD_IP_FILE_NAME : &str  = "config/old_ip.tmp";
+const WEBHOOK_FILE_NAME : &str = "config/webhook.json";
+const CONFIG_FILE_NAME : &str = "config/config.toml";
 
 
 fn main() {
     //Read config.toml or create it if it does not exist
-    let config_path = "config.toml";
-    if !Path::new(config_path).exists() {
-        fs::write(config_path, "webhook = \"\"\nwait_seconds = 60)")
+    if !Path::new("config").exists() {
+        fs::create_dir("config").expect("Unable to create config directory");
+    }
+
+    if !Path::new(CONFIG_FILE_NAME).exists() {
+        fs::write(CONFIG_FILE_NAME, "webhook = \"\"\nwait_seconds = 60")
             .expect("Unable to create config.toml");
         println!("config.toml created. Please fill in the token and webhook fields.");
         return;
     }
     // Read the config file
-    let config_content = fs::read_to_string(config_path)
+    let config_content = fs::read_to_string(CONFIG_FILE_NAME)
         .expect("Unable to read config.toml");
     let config: toml::Value = toml::from_str(&config_content).unwrap();
     let webhook = config.get("webhook").and_then(|v| v.as_str()).unwrap_or("");
