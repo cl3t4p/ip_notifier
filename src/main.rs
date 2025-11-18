@@ -29,6 +29,13 @@ fn main() {
     let config: toml::Value = toml::from_str(&config_content).unwrap();
     let webhook = config.get("webhook").and_then(|v| v.as_str()).unwrap_or("");
     let wait_seconds = config.get("wait_seconds").and_then(|v| v.as_integer()).unwrap_or(60) as u64;
+    let ip_grab_url = config.get("ip_grab_url").and_then(|v| v.as_str()).unwrap_or("https://api.ipify.org");
+    let blacklist_words = config.get("blacklist_words").and_then(|v| v.as_array()).unwrap_or(&vec![])
+        .iter()
+        .map(|val| val.as_str().map(|s| s.to_string()))
+        .collect::<Vec<Option<String>>>();
+
+
 
     if webhook.is_empty() {
         println!("Webhook URL is not set in config.toml. Please set it and try again.");
@@ -48,7 +55,7 @@ fn main() {
         old_ip =  fs::read_to_string(OLD_IP_FILE_NAME).unwrap();
     }else{
         loop {
-            match get_new_ip() {
+            match get_new_ip(ip_grab_url) {
                 Ok(response) => match response.text() {
                     Ok(ip) => {
                         old_ip = ip;
@@ -82,7 +89,7 @@ fn main() {
     loop {
         // Log the current IP address
         log.info("Checking for IP changes...");
-        let temp_ip_res = get_new_ip();
+        let temp_ip_res = get_new_ip(ip_grab_url);
 
 
         // If there is an error getting the current IP, log it
@@ -90,6 +97,31 @@ fn main() {
             log.error("Error getting the current IP address.");
         }else{
             let temp_ip = temp_ip_res.unwrap().text().unwrap();
+            // Check blacklist using regex patterns
+            let mut blacklist_match = false;
+            // Iterate through blacklist words and check if current IP matches any pattern
+            for word in blacklist_words.iter() {
+                let pattern = match word {
+                    Some(s) if !s.is_empty() => s,
+                    _ => continue,
+                };
+                match regex::Regex::new(pattern) {
+                    Ok(re) => {
+                        if re.is_match(&temp_ip) {
+                            log.error(format!("Current IP {} matches blacklist pattern '{}'. Skipping.", temp_ip, pattern).as_str());
+                            blacklist_match = true;
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        log.error(format!("Invalid regex pattern '{}': {}. Skipping pattern.", pattern, err).as_str());
+                    }
+                }
+            }
+            if blacklist_match {
+                thread::sleep(Duration::from_secs(wait_seconds));
+                continue;
+            }
             log.info(format!("Current IP: {}", temp_ip).as_str());
 
             if temp_ip != old_ip.clone() {
@@ -141,9 +173,9 @@ fn send_ip(ip : String,webhook : &str) -> Result<Response, Error> {
         .send();
 }
 
-fn get_new_ip() -> Result<Response,Error>{
+fn get_new_ip(ip_grab_url: &str) -> Result<Response,Error>{
 
     let client = Client::new();
-    return client.get("https://api.ipify.org")
+    return client.get(ip_grab_url)
     .send();
 }

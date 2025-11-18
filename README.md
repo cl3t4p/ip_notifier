@@ -1,4 +1,4 @@
-# ip_webhook
+# IP Webhook
 
 A simple Rust utility to monitor your public IP address and send updates to a configured webhook (e.g., Discord) when your IP changes.
 
@@ -22,6 +22,8 @@ A simple Rust utility to monitor your public IP address and send updates to a co
     Example `config.toml`:
     ```toml
     webhook = "https://your.webhook.url"
+    ip_grab_url = "https://api.ipify.org"
+    blacklist_words = ["^error.*", "^error.*"]
     wait_seconds = 60
     ```
 
